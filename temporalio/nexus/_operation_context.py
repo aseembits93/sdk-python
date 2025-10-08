@@ -90,7 +90,11 @@ def client() -> temporalio.client.Client:
 def _temporal_context() -> (
     Union[_TemporalStartOperationContext, _TemporalCancelOperationContext]
 ):
-    ctx = _try_temporal_context()
+    start_ctx = _temporal_start_operation_context.get(None)
+    cancel_ctx = _temporal_cancel_operation_context.get(None)
+    if start_ctx and cancel_ctx:
+        raise RuntimeError("Cannot be in both start and cancel operation contexts.")
+    ctx = start_ctx or cancel_ctx
     if ctx is None:
         raise RuntimeError("Not in Nexus operation context.")
     return ctx
