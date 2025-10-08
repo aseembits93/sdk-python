@@ -74,7 +74,11 @@ class Info:
 
 def in_operation() -> bool:
     """Whether the current code is inside a Nexus operation."""
-    return _try_temporal_context() is not None
+    start_ctx = _temporal_start_operation_context.get(None)
+    cancel_ctx = _temporal_cancel_operation_context.get(None)
+    if start_ctx and cancel_ctx:
+        raise RuntimeError("Cannot be in both start and cancel operation contexts.")
+    return (start_ctx or cancel_ctx) is not None
 
 
 def info() -> Info:
