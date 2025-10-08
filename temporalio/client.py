@@ -2507,8 +2507,15 @@ class WorkflowHandle(Generic[SelfType, ReturnType]):
         Returns:
             The update handle.
         """
-        return self.get_update_handle(
-            id, workflow_run_id=workflow_run_id, result_type=update._defn.ret_type
+        # Store commonly accessed property in a local variable for minor efficiency gain
+        ret_type = update._defn.ret_type
+        run_id_to_pass = workflow_run_id if workflow_run_id is not None else self._run_id
+        return WorkflowUpdateHandle(
+            self._client,
+            id,
+            self._id,
+            workflow_run_id=run_id_to_pass,
+            result_type=ret_type,
         )
 
 
@@ -2519,108 +2526,9 @@ class WithStartWorkflowOperation(Generic[SelfType, ReturnType]):
     workflow if necessary.
     """
 
-    # Overload for no-param workflow, with_start
-    @overload
     def __init__(
         self,
-        workflow: MethodAsyncNoParam[SelfType, ReturnType],
-        *,
-        id: str,
-        task_queue: str,
-        id_conflict_policy: temporalio.common.WorkflowIDConflictPolicy,
-        execution_timeout: Optional[timedelta] = None,
-        run_timeout: Optional[timedelta] = None,
-        task_timeout: Optional[timedelta] = None,
-        id_reuse_policy: temporalio.common.WorkflowIDReusePolicy = temporalio.common.WorkflowIDReusePolicy.ALLOW_DUPLICATE,
-        retry_policy: Optional[temporalio.common.RetryPolicy] = None,
-        cron_schedule: str = "",
-        memo: Optional[Mapping[str, Any]] = None,
-        search_attributes: Optional[
-            Union[
-                temporalio.common.TypedSearchAttributes,
-                temporalio.common.SearchAttributes,
-            ]
-        ] = None,
-        static_summary: Optional[str] = None,
-        static_details: Optional[str] = None,
-        start_delay: Optional[timedelta] = None,
-        rpc_metadata: Mapping[str, Union[str, bytes]] = {},
-        rpc_timeout: Optional[timedelta] = None,
-        priority: temporalio.common.Priority = temporalio.common.Priority.default,
-        versioning_override: Optional[temporalio.common.VersioningOverride] = None,
-    ) -> None: ...
-
-    # Overload for single-param workflow, with_start
-    @overload
-    def __init__(
-        self,
-        workflow: MethodAsyncSingleParam[SelfType, ParamType, ReturnType],
-        arg: ParamType,
-        *,
-        id: str,
-        task_queue: str,
-        id_conflict_policy: temporalio.common.WorkflowIDConflictPolicy,
-        execution_timeout: Optional[timedelta] = None,
-        run_timeout: Optional[timedelta] = None,
-        task_timeout: Optional[timedelta] = None,
-        id_reuse_policy: temporalio.common.WorkflowIDReusePolicy = temporalio.common.WorkflowIDReusePolicy.ALLOW_DUPLICATE,
-        retry_policy: Optional[temporalio.common.RetryPolicy] = None,
-        cron_schedule: str = "",
-        memo: Optional[Mapping[str, Any]] = None,
-        search_attributes: Optional[
-            Union[
-                temporalio.common.TypedSearchAttributes,
-                temporalio.common.SearchAttributes,
-            ]
-        ] = None,
-        static_summary: Optional[str] = None,
-        static_details: Optional[str] = None,
-        start_delay: Optional[timedelta] = None,
-        rpc_metadata: Mapping[str, Union[str, bytes]] = {},
-        rpc_timeout: Optional[timedelta] = None,
-        priority: temporalio.common.Priority = temporalio.common.Priority.default,
-        versioning_override: Optional[temporalio.common.VersioningOverride] = None,
-    ) -> None: ...
-
-    # Overload for multi-param workflow, with_start
-    @overload
-    def __init__(
-        self,
-        workflow: Callable[
-            Concatenate[SelfType, MultiParamSpec], Awaitable[ReturnType]
-        ],
-        *,
-        args: Sequence[Any],
-        id: str,
-        task_queue: str,
-        id_conflict_policy: temporalio.common.WorkflowIDConflictPolicy,
-        execution_timeout: Optional[timedelta] = None,
-        run_timeout: Optional[timedelta] = None,
-        task_timeout: Optional[timedelta] = None,
-        id_reuse_policy: temporalio.common.WorkflowIDReusePolicy = temporalio.common.WorkflowIDReusePolicy.ALLOW_DUPLICATE,
-        retry_policy: Optional[temporalio.common.RetryPolicy] = None,
-        cron_schedule: str = "",
-        memo: Optional[Mapping[str, Any]] = None,
-        search_attributes: Optional[
-            Union[
-                temporalio.common.TypedSearchAttributes,
-                temporalio.common.SearchAttributes,
-            ]
-        ] = None,
-        static_summary: Optional[str] = None,
-        static_details: Optional[str] = None,
-        start_delay: Optional[timedelta] = None,
-        rpc_metadata: Mapping[str, Union[str, bytes]] = {},
-        rpc_timeout: Optional[timedelta] = None,
-        priority: temporalio.common.Priority = temporalio.common.Priority.default,
-        versioning_override: Optional[temporalio.common.VersioningOverride] = None,
-    ) -> None: ...
-
-    # Overload for string-name workflow, with_start
-    @overload
-    def __init__(
-        self,
-        workflow: str,
+        workflow: Union[str, Callable[..., Awaitable[Any]]],
         arg: Any = temporalio.common._arg_unset,
         *,
         args: Sequence[Any] = [],
@@ -2648,7 +2556,267 @@ class WithStartWorkflowOperation(Generic[SelfType, ReturnType]):
         rpc_timeout: Optional[timedelta] = None,
         priority: temporalio.common.Priority = temporalio.common.Priority.default,
         versioning_override: Optional[temporalio.common.VersioningOverride] = None,
-    ) -> None: ...
+        stack_level: int = 2,
+    ) -> None:
+        """Create a WithStartWorkflowOperation.
+
+        See :py:meth:`temporalio.client.Client.start_workflow` for documentation of the
+        arguments.
+        """
+        temporalio.common._warn_on_deprecated_search_attributes(
+            search_attributes, stack_level=stack_level
+        )
+        name, result_type_from_run_fn = (
+            temporalio.workflow._Definition.get_name_and_result_type(workflow)
+        )
+        if id_conflict_policy == temporalio.common.WorkflowIDConflictPolicy.UNSPECIFIED:
+            raise ValueError("WorkflowIDConflictPolicy is required")
+
+        self._start_workflow_input = UpdateWithStartStartWorkflowInput(
+            workflow=name,
+            args=temporalio.common._arg_or_args(arg, args),
+            id=id,
+            task_queue=task_queue,
+            execution_timeout=execution_timeout,
+            run_timeout=run_timeout,
+            task_timeout=task_timeout,
+            id_reuse_policy=id_reuse_policy,
+            id_conflict_policy=id_conflict_policy,
+            retry_policy=retry_policy,
+            cron_schedule=cron_schedule,
+            memo=memo,
+            search_attributes=search_attributes,
+            static_summary=static_summary,
+            static_details=static_details,
+            start_delay=start_delay,
+            headers={},
+            ret_type=result_type or result_type_from_run_fn,
+            rpc_metadata=rpc_metadata,
+            rpc_timeout=rpc_timeout,
+            priority=priority,
+            versioning_override=versioning_override,
+        )
+        self._workflow_handle: Future[WorkflowHandle[SelfType, ReturnType]] = Future()
+        self._used = False
+
+    def __init__(
+        self,
+        workflow: Union[str, Callable[..., Awaitable[Any]]],
+        arg: Any = temporalio.common._arg_unset,
+        *,
+        args: Sequence[Any] = [],
+        id: str,
+        task_queue: str,
+        id_conflict_policy: temporalio.common.WorkflowIDConflictPolicy,
+        result_type: Optional[Type] = None,
+        execution_timeout: Optional[timedelta] = None,
+        run_timeout: Optional[timedelta] = None,
+        task_timeout: Optional[timedelta] = None,
+        id_reuse_policy: temporalio.common.WorkflowIDReusePolicy = temporalio.common.WorkflowIDReusePolicy.ALLOW_DUPLICATE,
+        retry_policy: Optional[temporalio.common.RetryPolicy] = None,
+        cron_schedule: str = "",
+        memo: Optional[Mapping[str, Any]] = None,
+        search_attributes: Optional[
+            Union[
+                temporalio.common.TypedSearchAttributes,
+                temporalio.common.SearchAttributes,
+            ]
+        ] = None,
+        static_summary: Optional[str] = None,
+        static_details: Optional[str] = None,
+        start_delay: Optional[timedelta] = None,
+        rpc_metadata: Mapping[str, Union[str, bytes]] = {},
+        rpc_timeout: Optional[timedelta] = None,
+        priority: temporalio.common.Priority = temporalio.common.Priority.default,
+        versioning_override: Optional[temporalio.common.VersioningOverride] = None,
+        stack_level: int = 2,
+    ) -> None:
+        """Create a WithStartWorkflowOperation.
+
+        See :py:meth:`temporalio.client.Client.start_workflow` for documentation of the
+        arguments.
+        """
+        temporalio.common._warn_on_deprecated_search_attributes(
+            search_attributes, stack_level=stack_level
+        )
+        name, result_type_from_run_fn = (
+            temporalio.workflow._Definition.get_name_and_result_type(workflow)
+        )
+        if id_conflict_policy == temporalio.common.WorkflowIDConflictPolicy.UNSPECIFIED:
+            raise ValueError("WorkflowIDConflictPolicy is required")
+
+        self._start_workflow_input = UpdateWithStartStartWorkflowInput(
+            workflow=name,
+            args=temporalio.common._arg_or_args(arg, args),
+            id=id,
+            task_queue=task_queue,
+            execution_timeout=execution_timeout,
+            run_timeout=run_timeout,
+            task_timeout=task_timeout,
+            id_reuse_policy=id_reuse_policy,
+            id_conflict_policy=id_conflict_policy,
+            retry_policy=retry_policy,
+            cron_schedule=cron_schedule,
+            memo=memo,
+            search_attributes=search_attributes,
+            static_summary=static_summary,
+            static_details=static_details,
+            start_delay=start_delay,
+            headers={},
+            ret_type=result_type or result_type_from_run_fn,
+            rpc_metadata=rpc_metadata,
+            rpc_timeout=rpc_timeout,
+            priority=priority,
+            versioning_override=versioning_override,
+        )
+        self._workflow_handle: Future[WorkflowHandle[SelfType, ReturnType]] = Future()
+        self._used = False
+
+    def __init__(
+        self,
+        workflow: Union[str, Callable[..., Awaitable[Any]]],
+        arg: Any = temporalio.common._arg_unset,
+        *,
+        args: Sequence[Any] = [],
+        id: str,
+        task_queue: str,
+        id_conflict_policy: temporalio.common.WorkflowIDConflictPolicy,
+        result_type: Optional[Type] = None,
+        execution_timeout: Optional[timedelta] = None,
+        run_timeout: Optional[timedelta] = None,
+        task_timeout: Optional[timedelta] = None,
+        id_reuse_policy: temporalio.common.WorkflowIDReusePolicy = temporalio.common.WorkflowIDReusePolicy.ALLOW_DUPLICATE,
+        retry_policy: Optional[temporalio.common.RetryPolicy] = None,
+        cron_schedule: str = "",
+        memo: Optional[Mapping[str, Any]] = None,
+        search_attributes: Optional[
+            Union[
+                temporalio.common.TypedSearchAttributes,
+                temporalio.common.SearchAttributes,
+            ]
+        ] = None,
+        static_summary: Optional[str] = None,
+        static_details: Optional[str] = None,
+        start_delay: Optional[timedelta] = None,
+        rpc_metadata: Mapping[str, Union[str, bytes]] = {},
+        rpc_timeout: Optional[timedelta] = None,
+        priority: temporalio.common.Priority = temporalio.common.Priority.default,
+        versioning_override: Optional[temporalio.common.VersioningOverride] = None,
+        stack_level: int = 2,
+    ) -> None:
+        """Create a WithStartWorkflowOperation.
+
+        See :py:meth:`temporalio.client.Client.start_workflow` for documentation of the
+        arguments.
+        """
+        temporalio.common._warn_on_deprecated_search_attributes(
+            search_attributes, stack_level=stack_level
+        )
+        name, result_type_from_run_fn = (
+            temporalio.workflow._Definition.get_name_and_result_type(workflow)
+        )
+        if id_conflict_policy == temporalio.common.WorkflowIDConflictPolicy.UNSPECIFIED:
+            raise ValueError("WorkflowIDConflictPolicy is required")
+
+        self._start_workflow_input = UpdateWithStartStartWorkflowInput(
+            workflow=name,
+            args=temporalio.common._arg_or_args(arg, args),
+            id=id,
+            task_queue=task_queue,
+            execution_timeout=execution_timeout,
+            run_timeout=run_timeout,
+            task_timeout=task_timeout,
+            id_reuse_policy=id_reuse_policy,
+            id_conflict_policy=id_conflict_policy,
+            retry_policy=retry_policy,
+            cron_schedule=cron_schedule,
+            memo=memo,
+            search_attributes=search_attributes,
+            static_summary=static_summary,
+            static_details=static_details,
+            start_delay=start_delay,
+            headers={},
+            ret_type=result_type or result_type_from_run_fn,
+            rpc_metadata=rpc_metadata,
+            rpc_timeout=rpc_timeout,
+            priority=priority,
+            versioning_override=versioning_override,
+        )
+        self._workflow_handle: Future[WorkflowHandle[SelfType, ReturnType]] = Future()
+        self._used = False
+
+    def __init__(
+        self,
+        workflow: Union[str, Callable[..., Awaitable[Any]]],
+        arg: Any = temporalio.common._arg_unset,
+        *,
+        args: Sequence[Any] = [],
+        id: str,
+        task_queue: str,
+        id_conflict_policy: temporalio.common.WorkflowIDConflictPolicy,
+        result_type: Optional[Type] = None,
+        execution_timeout: Optional[timedelta] = None,
+        run_timeout: Optional[timedelta] = None,
+        task_timeout: Optional[timedelta] = None,
+        id_reuse_policy: temporalio.common.WorkflowIDReusePolicy = temporalio.common.WorkflowIDReusePolicy.ALLOW_DUPLICATE,
+        retry_policy: Optional[temporalio.common.RetryPolicy] = None,
+        cron_schedule: str = "",
+        memo: Optional[Mapping[str, Any]] = None,
+        search_attributes: Optional[
+            Union[
+                temporalio.common.TypedSearchAttributes,
+                temporalio.common.SearchAttributes,
+            ]
+        ] = None,
+        static_summary: Optional[str] = None,
+        static_details: Optional[str] = None,
+        start_delay: Optional[timedelta] = None,
+        rpc_metadata: Mapping[str, Union[str, bytes]] = {},
+        rpc_timeout: Optional[timedelta] = None,
+        priority: temporalio.common.Priority = temporalio.common.Priority.default,
+        versioning_override: Optional[temporalio.common.VersioningOverride] = None,
+        stack_level: int = 2,
+    ) -> None:
+        """Create a WithStartWorkflowOperation.
+
+        See :py:meth:`temporalio.client.Client.start_workflow` for documentation of the
+        arguments.
+        """
+        temporalio.common._warn_on_deprecated_search_attributes(
+            search_attributes, stack_level=stack_level
+        )
+        name, result_type_from_run_fn = (
+            temporalio.workflow._Definition.get_name_and_result_type(workflow)
+        )
+        if id_conflict_policy == temporalio.common.WorkflowIDConflictPolicy.UNSPECIFIED:
+            raise ValueError("WorkflowIDConflictPolicy is required")
+
+        self._start_workflow_input = UpdateWithStartStartWorkflowInput(
+            workflow=name,
+            args=temporalio.common._arg_or_args(arg, args),
+            id=id,
+            task_queue=task_queue,
+            execution_timeout=execution_timeout,
+            run_timeout=run_timeout,
+            task_timeout=task_timeout,
+            id_reuse_policy=id_reuse_policy,
+            id_conflict_policy=id_conflict_policy,
+            retry_policy=retry_policy,
+            cron_schedule=cron_schedule,
+            memo=memo,
+            search_attributes=search_attributes,
+            static_summary=static_summary,
+            static_details=static_details,
+            start_delay=start_delay,
+            headers={},
+            ret_type=result_type or result_type_from_run_fn,
+            rpc_metadata=rpc_metadata,
+            rpc_timeout=rpc_timeout,
+            priority=priority,
+            versioning_override=versioning_override,
+        )
+        self._workflow_handle: Future[WorkflowHandle[SelfType, ReturnType]] = Future()
+        self._used = False
 
     def __init__(
         self,
@@ -3993,96 +4161,590 @@ class ScheduleActionStartWorkflow(ScheduleAction):
     ) -> ScheduleActionStartWorkflow:
         return ScheduleActionStartWorkflow("<unset>", raw_info=info)
 
-    # Overload for no-param workflow
-    @overload
     def __init__(
         self,
-        workflow: MethodAsyncNoParam[SelfType, ReturnType],
-        *,
-        id: str,
-        task_queue: str,
-        execution_timeout: Optional[timedelta] = None,
-        run_timeout: Optional[timedelta] = None,
-        task_timeout: Optional[timedelta] = None,
-        retry_policy: Optional[temporalio.common.RetryPolicy] = None,
-        memo: Optional[Mapping[str, Any]] = None,
-        typed_search_attributes: temporalio.common.TypedSearchAttributes = temporalio.common.TypedSearchAttributes.empty,
-        static_summary: Optional[str] = None,
-        static_details: Optional[str] = None,
-        priority: temporalio.common.Priority = temporalio.common.Priority.default,
-    ) -> None: ...
-
-    # Overload for single-param workflow
-    @overload
-    def __init__(
-        self,
-        workflow: MethodAsyncSingleParam[SelfType, ParamType, ReturnType],
-        arg: ParamType,
-        *,
-        id: str,
-        task_queue: str,
-        execution_timeout: Optional[timedelta] = None,
-        run_timeout: Optional[timedelta] = None,
-        task_timeout: Optional[timedelta] = None,
-        retry_policy: Optional[temporalio.common.RetryPolicy] = None,
-        memo: Optional[Mapping[str, Any]] = None,
-        typed_search_attributes: temporalio.common.TypedSearchAttributes = temporalio.common.TypedSearchAttributes.empty,
-        static_summary: Optional[str] = None,
-        static_details: Optional[str] = None,
-        priority: temporalio.common.Priority = temporalio.common.Priority.default,
-    ) -> None: ...
-
-    # Overload for multi-param workflow
-    @overload
-    def __init__(
-        self,
-        workflow: Callable[
-            Concatenate[SelfType, MultiParamSpec], Awaitable[ReturnType]
-        ],
-        *,
-        args: Sequence[Any],
-        id: str,
-        task_queue: str,
-        execution_timeout: Optional[timedelta] = None,
-        run_timeout: Optional[timedelta] = None,
-        task_timeout: Optional[timedelta] = None,
-        retry_policy: Optional[temporalio.common.RetryPolicy] = None,
-        memo: Optional[Mapping[str, Any]] = None,
-        typed_search_attributes: temporalio.common.TypedSearchAttributes = temporalio.common.TypedSearchAttributes.empty,
-        static_summary: Optional[str] = None,
-        static_details: Optional[str] = None,
-        priority: temporalio.common.Priority = temporalio.common.Priority.default,
-    ) -> None: ...
-
-    # Overload for string-name workflow
-    @overload
-    def __init__(
-        self,
-        workflow: str,
+        workflow: Union[str, Callable[..., Awaitable[Any]]],
         arg: Any = temporalio.common._arg_unset,
         *,
         args: Sequence[Any] = [],
-        id: str,
-        task_queue: str,
+        id: Optional[str] = None,
+        task_queue: Optional[str] = None,
         execution_timeout: Optional[timedelta] = None,
         run_timeout: Optional[timedelta] = None,
         task_timeout: Optional[timedelta] = None,
         retry_policy: Optional[temporalio.common.RetryPolicy] = None,
         memo: Optional[Mapping[str, Any]] = None,
         typed_search_attributes: temporalio.common.TypedSearchAttributes = temporalio.common.TypedSearchAttributes.empty,
+        untyped_search_attributes: temporalio.common.SearchAttributes = {},
         static_summary: Optional[str] = None,
         static_details: Optional[str] = None,
+        headers: Optional[Mapping[str, temporalio.api.common.v1.Payload]] = None,
+        raw_info: Optional[temporalio.api.workflow.v1.NewWorkflowExecutionInfo] = None,
         priority: temporalio.common.Priority = temporalio.common.Priority.default,
-    ) -> None: ...
+    ) -> None:
+        """Create a start-workflow action.
 
-    # Overload for raw info
-    @overload
+        See :py:meth:`Client.start_workflow` for details on these parameter
+        values.
+        """
+        super().__init__()
+        if raw_info:
+            self._from_raw = True
+            # Ignore other fields
+            self.workflow = raw_info.workflow_type.name
+            self.args = raw_info.input.payloads if raw_info.input else []
+            self.id = raw_info.workflow_id
+            self.task_queue = raw_info.task_queue.name
+            self.execution_timeout = (
+                raw_info.workflow_execution_timeout.ToTimedelta()
+                if raw_info.HasField("workflow_execution_timeout")
+                else None
+            )
+            self.run_timeout = (
+                raw_info.workflow_run_timeout.ToTimedelta()
+                if raw_info.HasField("workflow_run_timeout")
+                else None
+            )
+            self.task_timeout = (
+                raw_info.workflow_task_timeout.ToTimedelta()
+                if raw_info.HasField("workflow_task_timeout")
+                else None
+            )
+            self.retry_policy = (
+                temporalio.common.RetryPolicy.from_proto(raw_info.retry_policy)
+                if raw_info.HasField("retry_policy")
+                else None
+            )
+            self.memo = raw_info.memo.fields if raw_info.memo.fields else None
+            self.typed_search_attributes = (
+                temporalio.converter.decode_typed_search_attributes(
+                    raw_info.search_attributes
+                )
+            )
+            self.headers = raw_info.header.fields if raw_info.header.fields else None
+            # Also set the untyped attributes as the set of attributes from
+            # decode with the typed ones removed
+            self.untyped_search_attributes = (
+                temporalio.converter.decode_search_attributes(
+                    raw_info.search_attributes
+                )
+            )
+            for pair in self.typed_search_attributes:
+                if pair.key.name in self.untyped_search_attributes:
+                    # We know this is mutable here
+                    del self.untyped_search_attributes[pair.key.name]  # type: ignore
+            self.static_summary = (
+                raw_info.user_metadata.summary
+                if raw_info.HasField("user_metadata") and raw_info.user_metadata.summary
+                else None
+            )
+            self.static_details = (
+                raw_info.user_metadata.details
+                if raw_info.HasField("user_metadata") and raw_info.user_metadata.details
+                else None
+            )
+            self.priority = (
+                temporalio.common.Priority._from_proto(raw_info.priority)
+                if raw_info.HasField("priority") and raw_info.priority
+                else temporalio.common.Priority.default
+            )
+        else:
+            self._from_raw = False
+            if not id:
+                raise ValueError("ID required")
+            if not task_queue:
+                raise ValueError("Task queue required")
+            # Use definition if callable
+            if callable(workflow):
+                defn = temporalio.workflow._Definition.must_from_run_fn(workflow)
+                if not defn.name:
+                    raise ValueError("Cannot schedule dynamic workflow explicitly")
+                workflow = defn.name
+            elif not isinstance(workflow, str):
+                raise TypeError("Workflow must be a string or callable")
+            self.workflow = workflow
+            self.args = temporalio.common._arg_or_args(arg, args)
+            self.id = id
+            self.task_queue = task_queue
+            self.execution_timeout = execution_timeout
+            self.run_timeout = run_timeout
+            self.task_timeout = task_timeout
+            self.retry_policy = retry_policy
+            self.memo = memo
+            self.typed_search_attributes = typed_search_attributes
+            self.untyped_search_attributes = untyped_search_attributes
+            self.headers = headers  # encode here
+            self.static_summary = static_summary
+            self.static_details = static_details
+            self.priority = priority
+
     def __init__(
         self,
-        workflow: str,
+        workflow: Union[str, Callable[..., Awaitable[Any]]],
+        arg: Any = temporalio.common._arg_unset,
         *,
-        raw_info: temporalio.api.workflow.v1.NewWorkflowExecutionInfo,
-    ) -> None: ...
+        args: Sequence[Any] = [],
+        id: Optional[str] = None,
+        task_queue: Optional[str] = None,
+        execution_timeout: Optional[timedelta] = None,
+        run_timeout: Optional[timedelta] = None,
+        task_timeout: Optional[timedelta] = None,
+        retry_policy: Optional[temporalio.common.RetryPolicy] = None,
+        memo: Optional[Mapping[str, Any]] = None,
+        typed_search_attributes: temporalio.common.TypedSearchAttributes = temporalio.common.TypedSearchAttributes.empty,
+        untyped_search_attributes: temporalio.common.SearchAttributes = {},
+        static_summary: Optional[str] = None,
+        static_details: Optional[str] = None,
+        headers: Optional[Mapping[str, temporalio.api.common.v1.Payload]] = None,
+        raw_info: Optional[temporalio.api.workflow.v1.NewWorkflowExecutionInfo] = None,
+        priority: temporalio.common.Priority = temporalio.common.Priority.default,
+    ) -> None:
+        """Create a start-workflow action.
+
+        See :py:meth:`Client.start_workflow` for details on these parameter
+        values.
+        """
+        super().__init__()
+        if raw_info:
+            self._from_raw = True
+            # Ignore other fields
+            self.workflow = raw_info.workflow_type.name
+            self.args = raw_info.input.payloads if raw_info.input else []
+            self.id = raw_info.workflow_id
+            self.task_queue = raw_info.task_queue.name
+            self.execution_timeout = (
+                raw_info.workflow_execution_timeout.ToTimedelta()
+                if raw_info.HasField("workflow_execution_timeout")
+                else None
+            )
+            self.run_timeout = (
+                raw_info.workflow_run_timeout.ToTimedelta()
+                if raw_info.HasField("workflow_run_timeout")
+                else None
+            )
+            self.task_timeout = (
+                raw_info.workflow_task_timeout.ToTimedelta()
+                if raw_info.HasField("workflow_task_timeout")
+                else None
+            )
+            self.retry_policy = (
+                temporalio.common.RetryPolicy.from_proto(raw_info.retry_policy)
+                if raw_info.HasField("retry_policy")
+                else None
+            )
+            self.memo = raw_info.memo.fields if raw_info.memo.fields else None
+            self.typed_search_attributes = (
+                temporalio.converter.decode_typed_search_attributes(
+                    raw_info.search_attributes
+                )
+            )
+            self.headers = raw_info.header.fields if raw_info.header.fields else None
+            # Also set the untyped attributes as the set of attributes from
+            # decode with the typed ones removed
+            self.untyped_search_attributes = (
+                temporalio.converter.decode_search_attributes(
+                    raw_info.search_attributes
+                )
+            )
+            for pair in self.typed_search_attributes:
+                if pair.key.name in self.untyped_search_attributes:
+                    # We know this is mutable here
+                    del self.untyped_search_attributes[pair.key.name]  # type: ignore
+            self.static_summary = (
+                raw_info.user_metadata.summary
+                if raw_info.HasField("user_metadata") and raw_info.user_metadata.summary
+                else None
+            )
+            self.static_details = (
+                raw_info.user_metadata.details
+                if raw_info.HasField("user_metadata") and raw_info.user_metadata.details
+                else None
+            )
+            self.priority = (
+                temporalio.common.Priority._from_proto(raw_info.priority)
+                if raw_info.HasField("priority") and raw_info.priority
+                else temporalio.common.Priority.default
+            )
+        else:
+            self._from_raw = False
+            if not id:
+                raise ValueError("ID required")
+            if not task_queue:
+                raise ValueError("Task queue required")
+            # Use definition if callable
+            if callable(workflow):
+                defn = temporalio.workflow._Definition.must_from_run_fn(workflow)
+                if not defn.name:
+                    raise ValueError("Cannot schedule dynamic workflow explicitly")
+                workflow = defn.name
+            elif not isinstance(workflow, str):
+                raise TypeError("Workflow must be a string or callable")
+            self.workflow = workflow
+            self.args = temporalio.common._arg_or_args(arg, args)
+            self.id = id
+            self.task_queue = task_queue
+            self.execution_timeout = execution_timeout
+            self.run_timeout = run_timeout
+            self.task_timeout = task_timeout
+            self.retry_policy = retry_policy
+            self.memo = memo
+            self.typed_search_attributes = typed_search_attributes
+            self.untyped_search_attributes = untyped_search_attributes
+            self.headers = headers  # encode here
+            self.static_summary = static_summary
+            self.static_details = static_details
+            self.priority = priority
+
+    def __init__(
+        self,
+        workflow: Union[str, Callable[..., Awaitable[Any]]],
+        arg: Any = temporalio.common._arg_unset,
+        *,
+        args: Sequence[Any] = [],
+        id: Optional[str] = None,
+        task_queue: Optional[str] = None,
+        execution_timeout: Optional[timedelta] = None,
+        run_timeout: Optional[timedelta] = None,
+        task_timeout: Optional[timedelta] = None,
+        retry_policy: Optional[temporalio.common.RetryPolicy] = None,
+        memo: Optional[Mapping[str, Any]] = None,
+        typed_search_attributes: temporalio.common.TypedSearchAttributes = temporalio.common.TypedSearchAttributes.empty,
+        untyped_search_attributes: temporalio.common.SearchAttributes = {},
+        static_summary: Optional[str] = None,
+        static_details: Optional[str] = None,
+        headers: Optional[Mapping[str, temporalio.api.common.v1.Payload]] = None,
+        raw_info: Optional[temporalio.api.workflow.v1.NewWorkflowExecutionInfo] = None,
+        priority: temporalio.common.Priority = temporalio.common.Priority.default,
+    ) -> None:
+        """Create a start-workflow action.
+
+        See :py:meth:`Client.start_workflow` for details on these parameter
+        values.
+        """
+        super().__init__()
+        if raw_info:
+            self._from_raw = True
+            # Ignore other fields
+            self.workflow = raw_info.workflow_type.name
+            self.args = raw_info.input.payloads if raw_info.input else []
+            self.id = raw_info.workflow_id
+            self.task_queue = raw_info.task_queue.name
+            self.execution_timeout = (
+                raw_info.workflow_execution_timeout.ToTimedelta()
+                if raw_info.HasField("workflow_execution_timeout")
+                else None
+            )
+            self.run_timeout = (
+                raw_info.workflow_run_timeout.ToTimedelta()
+                if raw_info.HasField("workflow_run_timeout")
+                else None
+            )
+            self.task_timeout = (
+                raw_info.workflow_task_timeout.ToTimedelta()
+                if raw_info.HasField("workflow_task_timeout")
+                else None
+            )
+            self.retry_policy = (
+                temporalio.common.RetryPolicy.from_proto(raw_info.retry_policy)
+                if raw_info.HasField("retry_policy")
+                else None
+            )
+            self.memo = raw_info.memo.fields if raw_info.memo.fields else None
+            self.typed_search_attributes = (
+                temporalio.converter.decode_typed_search_attributes(
+                    raw_info.search_attributes
+                )
+            )
+            self.headers = raw_info.header.fields if raw_info.header.fields else None
+            # Also set the untyped attributes as the set of attributes from
+            # decode with the typed ones removed
+            self.untyped_search_attributes = (
+                temporalio.converter.decode_search_attributes(
+                    raw_info.search_attributes
+                )
+            )
+            for pair in self.typed_search_attributes:
+                if pair.key.name in self.untyped_search_attributes:
+                    # We know this is mutable here
+                    del self.untyped_search_attributes[pair.key.name]  # type: ignore
+            self.static_summary = (
+                raw_info.user_metadata.summary
+                if raw_info.HasField("user_metadata") and raw_info.user_metadata.summary
+                else None
+            )
+            self.static_details = (
+                raw_info.user_metadata.details
+                if raw_info.HasField("user_metadata") and raw_info.user_metadata.details
+                else None
+            )
+            self.priority = (
+                temporalio.common.Priority._from_proto(raw_info.priority)
+                if raw_info.HasField("priority") and raw_info.priority
+                else temporalio.common.Priority.default
+            )
+        else:
+            self._from_raw = False
+            if not id:
+                raise ValueError("ID required")
+            if not task_queue:
+                raise ValueError("Task queue required")
+            # Use definition if callable
+            if callable(workflow):
+                defn = temporalio.workflow._Definition.must_from_run_fn(workflow)
+                if not defn.name:
+                    raise ValueError("Cannot schedule dynamic workflow explicitly")
+                workflow = defn.name
+            elif not isinstance(workflow, str):
+                raise TypeError("Workflow must be a string or callable")
+            self.workflow = workflow
+            self.args = temporalio.common._arg_or_args(arg, args)
+            self.id = id
+            self.task_queue = task_queue
+            self.execution_timeout = execution_timeout
+            self.run_timeout = run_timeout
+            self.task_timeout = task_timeout
+            self.retry_policy = retry_policy
+            self.memo = memo
+            self.typed_search_attributes = typed_search_attributes
+            self.untyped_search_attributes = untyped_search_attributes
+            self.headers = headers  # encode here
+            self.static_summary = static_summary
+            self.static_details = static_details
+            self.priority = priority
+
+    def __init__(
+        self,
+        workflow: Union[str, Callable[..., Awaitable[Any]]],
+        arg: Any = temporalio.common._arg_unset,
+        *,
+        args: Sequence[Any] = [],
+        id: Optional[str] = None,
+        task_queue: Optional[str] = None,
+        execution_timeout: Optional[timedelta] = None,
+        run_timeout: Optional[timedelta] = None,
+        task_timeout: Optional[timedelta] = None,
+        retry_policy: Optional[temporalio.common.RetryPolicy] = None,
+        memo: Optional[Mapping[str, Any]] = None,
+        typed_search_attributes: temporalio.common.TypedSearchAttributes = temporalio.common.TypedSearchAttributes.empty,
+        untyped_search_attributes: temporalio.common.SearchAttributes = {},
+        static_summary: Optional[str] = None,
+        static_details: Optional[str] = None,
+        headers: Optional[Mapping[str, temporalio.api.common.v1.Payload]] = None,
+        raw_info: Optional[temporalio.api.workflow.v1.NewWorkflowExecutionInfo] = None,
+        priority: temporalio.common.Priority = temporalio.common.Priority.default,
+    ) -> None:
+        """Create a start-workflow action.
+
+        See :py:meth:`Client.start_workflow` for details on these parameter
+        values.
+        """
+        super().__init__()
+        if raw_info:
+            self._from_raw = True
+            # Ignore other fields
+            self.workflow = raw_info.workflow_type.name
+            self.args = raw_info.input.payloads if raw_info.input else []
+            self.id = raw_info.workflow_id
+            self.task_queue = raw_info.task_queue.name
+            self.execution_timeout = (
+                raw_info.workflow_execution_timeout.ToTimedelta()
+                if raw_info.HasField("workflow_execution_timeout")
+                else None
+            )
+            self.run_timeout = (
+                raw_info.workflow_run_timeout.ToTimedelta()
+                if raw_info.HasField("workflow_run_timeout")
+                else None
+            )
+            self.task_timeout = (
+                raw_info.workflow_task_timeout.ToTimedelta()
+                if raw_info.HasField("workflow_task_timeout")
+                else None
+            )
+            self.retry_policy = (
+                temporalio.common.RetryPolicy.from_proto(raw_info.retry_policy)
+                if raw_info.HasField("retry_policy")
+                else None
+            )
+            self.memo = raw_info.memo.fields if raw_info.memo.fields else None
+            self.typed_search_attributes = (
+                temporalio.converter.decode_typed_search_attributes(
+                    raw_info.search_attributes
+                )
+            )
+            self.headers = raw_info.header.fields if raw_info.header.fields else None
+            # Also set the untyped attributes as the set of attributes from
+            # decode with the typed ones removed
+            self.untyped_search_attributes = (
+                temporalio.converter.decode_search_attributes(
+                    raw_info.search_attributes
+                )
+            )
+            for pair in self.typed_search_attributes:
+                if pair.key.name in self.untyped_search_attributes:
+                    # We know this is mutable here
+                    del self.untyped_search_attributes[pair.key.name]  # type: ignore
+            self.static_summary = (
+                raw_info.user_metadata.summary
+                if raw_info.HasField("user_metadata") and raw_info.user_metadata.summary
+                else None
+            )
+            self.static_details = (
+                raw_info.user_metadata.details
+                if raw_info.HasField("user_metadata") and raw_info.user_metadata.details
+                else None
+            )
+            self.priority = (
+                temporalio.common.Priority._from_proto(raw_info.priority)
+                if raw_info.HasField("priority") and raw_info.priority
+                else temporalio.common.Priority.default
+            )
+        else:
+            self._from_raw = False
+            if not id:
+                raise ValueError("ID required")
+            if not task_queue:
+                raise ValueError("Task queue required")
+            # Use definition if callable
+            if callable(workflow):
+                defn = temporalio.workflow._Definition.must_from_run_fn(workflow)
+                if not defn.name:
+                    raise ValueError("Cannot schedule dynamic workflow explicitly")
+                workflow = defn.name
+            elif not isinstance(workflow, str):
+                raise TypeError("Workflow must be a string or callable")
+            self.workflow = workflow
+            self.args = temporalio.common._arg_or_args(arg, args)
+            self.id = id
+            self.task_queue = task_queue
+            self.execution_timeout = execution_timeout
+            self.run_timeout = run_timeout
+            self.task_timeout = task_timeout
+            self.retry_policy = retry_policy
+            self.memo = memo
+            self.typed_search_attributes = typed_search_attributes
+            self.untyped_search_attributes = untyped_search_attributes
+            self.headers = headers  # encode here
+            self.static_summary = static_summary
+            self.static_details = static_details
+            self.priority = priority
+
+    def __init__(
+        self,
+        workflow: Union[str, Callable[..., Awaitable[Any]]],
+        arg: Any = temporalio.common._arg_unset,
+        *,
+        args: Sequence[Any] = [],
+        id: Optional[str] = None,
+        task_queue: Optional[str] = None,
+        execution_timeout: Optional[timedelta] = None,
+        run_timeout: Optional[timedelta] = None,
+        task_timeout: Optional[timedelta] = None,
+        retry_policy: Optional[temporalio.common.RetryPolicy] = None,
+        memo: Optional[Mapping[str, Any]] = None,
+        typed_search_attributes: temporalio.common.TypedSearchAttributes = temporalio.common.TypedSearchAttributes.empty,
+        untyped_search_attributes: temporalio.common.SearchAttributes = {},
+        static_summary: Optional[str] = None,
+        static_details: Optional[str] = None,
+        headers: Optional[Mapping[str, temporalio.api.common.v1.Payload]] = None,
+        raw_info: Optional[temporalio.api.workflow.v1.NewWorkflowExecutionInfo] = None,
+        priority: temporalio.common.Priority = temporalio.common.Priority.default,
+    ) -> None:
+        """Create a start-workflow action.
+
+        See :py:meth:`Client.start_workflow` for details on these parameter
+        values.
+        """
+        super().__init__()
+        if raw_info:
+            self._from_raw = True
+            # Ignore other fields
+            self.workflow = raw_info.workflow_type.name
+            self.args = raw_info.input.payloads if raw_info.input else []
+            self.id = raw_info.workflow_id
+            self.task_queue = raw_info.task_queue.name
+            self.execution_timeout = (
+                raw_info.workflow_execution_timeout.ToTimedelta()
+                if raw_info.HasField("workflow_execution_timeout")
+                else None
+            )
+            self.run_timeout = (
+                raw_info.workflow_run_timeout.ToTimedelta()
+                if raw_info.HasField("workflow_run_timeout")
+                else None
+            )
+            self.task_timeout = (
+                raw_info.workflow_task_timeout.ToTimedelta()
+                if raw_info.HasField("workflow_task_timeout")
+                else None
+            )
+            self.retry_policy = (
+                temporalio.common.RetryPolicy.from_proto(raw_info.retry_policy)
+                if raw_info.HasField("retry_policy")
+                else None
+            )
+            self.memo = raw_info.memo.fields if raw_info.memo.fields else None
+            self.typed_search_attributes = (
+                temporalio.converter.decode_typed_search_attributes(
+                    raw_info.search_attributes
+                )
+            )
+            self.headers = raw_info.header.fields if raw_info.header.fields else None
+            # Also set the untyped attributes as the set of attributes from
+            # decode with the typed ones removed
+            self.untyped_search_attributes = (
+                temporalio.converter.decode_search_attributes(
+                    raw_info.search_attributes
+                )
+            )
+            for pair in self.typed_search_attributes:
+                if pair.key.name in self.untyped_search_attributes:
+                    # We know this is mutable here
+                    del self.untyped_search_attributes[pair.key.name]  # type: ignore
+            self.static_summary = (
+                raw_info.user_metadata.summary
+                if raw_info.HasField("user_metadata") and raw_info.user_metadata.summary
+                else None
+            )
+            self.static_details = (
+                raw_info.user_metadata.details
+                if raw_info.HasField("user_metadata") and raw_info.user_metadata.details
+                else None
+            )
+            self.priority = (
+                temporalio.common.Priority._from_proto(raw_info.priority)
+                if raw_info.HasField("priority") and raw_info.priority
+                else temporalio.common.Priority.default
+            )
+        else:
+            self._from_raw = False
+            if not id:
+                raise ValueError("ID required")
+            if not task_queue:
+                raise ValueError("Task queue required")
+            # Use definition if callable
+            if callable(workflow):
+                defn = temporalio.workflow._Definition.must_from_run_fn(workflow)
+                if not defn.name:
+                    raise ValueError("Cannot schedule dynamic workflow explicitly")
+                workflow = defn.name
+            elif not isinstance(workflow, str):
+                raise TypeError("Workflow must be a string or callable")
+            self.workflow = workflow
+            self.args = temporalio.common._arg_or_args(arg, args)
+            self.id = id
+            self.task_queue = task_queue
+            self.execution_timeout = execution_timeout
+            self.run_timeout = run_timeout
+            self.task_timeout = task_timeout
+            self.retry_policy = retry_policy
+            self.memo = memo
+            self.typed_search_attributes = typed_search_attributes
+            self.untyped_search_attributes = untyped_search_attributes
+            self.headers = headers  # encode here
+            self.static_summary = static_summary
+            self.static_details = static_details
+            self.priority = priority
 
     def __init__(
         self,
